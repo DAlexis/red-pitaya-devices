@@ -31,7 +31,7 @@ bool LightningTrigger::parseParameters(int argc, char **argv)
 	po::options_description captureOptions("Capture options");
 	captureOptions.add_options()
 		("threshold,t",   po::value<double>()->default_value(m_treshold), "Trigger treshold, Volts")
-		("decimation,d",  po::value<unsigned int>()->default_value(8),  "Field decimation. Allowed: "
+		("decimation,d",  po::value<unsigned int>()->default_value(m_decimationValue),  "Field decimation. Allowed: "
 				"1, 8, 64, 1024, 8192, 65536");
 
 	po::options_description outputOptions("Output options");
@@ -53,7 +53,8 @@ bool LightningTrigger::parseParameters(int argc, char **argv)
 		po::notify(cmdLineOptions);
 		m_treshold = cmdLineOptions["threshold"].as<double>();
 		m_ttlPulse = cmdLineOptions["pulse-width"].as<double>();
-		m_decimation = convertDecimation(cmdLineOptions["decimation"].as<unsigned int>());
+		m_decimationValue = cmdLineOptions["decimation"].as<unsigned int>();
+		m_decimation = convertDecimation(m_decimationValue);
 		m_filenameTemplate = cmdLineOptions["field-file"].as<string>();
 		m_capuresCount = cmdLineOptions["captures-cout"].as<unsigned int>();
 	}
@@ -82,6 +83,8 @@ bool LightningTrigger::parseParameters(int argc, char **argv)
 
 void LightningTrigger::run()
 {
+	//return 0;
+
 	// Print error, if rp_Init() function failed
 	if (rp_Init() != RP_OK)
 	{
@@ -92,20 +95,23 @@ void LightningTrigger::run()
 
 	m_buffer.resize(bufferSize, 0.0);
 
+	int result = RP_OK;
+
+
 	for (unsigned int c=0; !m_shouldStop && (m_capuresCount == 0 || c != m_capuresCount); c++)
 	{
 		rp_AcqReset();
 		rp_AcqSetDecimation(m_decimation);
 		rp_AcqSetTriggerLevel(RP_CH_1, m_treshold);
 		rp_AcqSetTriggerDelay(0);
-
 		rp_AcqStart();
 
 		// After acquisition is started some time delay is needed in order to acquire fresh samples in to buffer
 		// Here we have used time delay of one second but you can calculate exact value taking in to account buffer
 		//length and smaling rate
 
-		usleep(100);
+		//usleep(double(m_decimationValue) / 125e6 * bufferSize * 1000 * 1.5);
+		usleep(double(m_decimationValue) / 125e6 * bufferSize * 1000 * 3);
 		rp_AcqSetTriggerSrc(RP_TRIG_SRC_CHA_PE);
 		rp_acq_trig_state_t state = RP_TRIG_STATE_TRIGGERED;
 
@@ -122,8 +128,14 @@ void LightningTrigger::run()
 		if (m_shouldStop)
 			break;
 
-		uint32_t readed = 0;
-		rp_AcqGetOldestDataV(RP_CH_1, &readed, m_buffer.data());
+		std::fill(m_buffer.begin(), m_buffer.end(), 0);
+
+		uint32_t readed = bufferSize;
+		result = rp_AcqGetOldestDataV(RP_CH_1, &readed, m_buffer.data());
+		if (result != RP_OK)
+		{
+			cerr << "Error: rp_AcqGetOldestDataV result is " << result << endl;
+		}
 
 		doBlink();
 
@@ -163,7 +175,7 @@ std::string LightningTrigger::getTime()
 	ostringstream oss;
 	auto t = std::time(nullptr);
 	auto tm = *std::localtime(&t);
-	oss << std::put_time(&tm, "%Y-%m-%d_%H-%M-%S") << endl;
+	oss << std::put_time(&tm, "%Y-%m-%d_%H-%M-%S");
 	return oss.str();
 }
 

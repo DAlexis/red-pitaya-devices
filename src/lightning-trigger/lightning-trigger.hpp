@@ -38,6 +38,7 @@ private:
 	std::string m_filenameTemplate = "recorded-field-%n-%t.bin";
 	bool m_fileEnabled = false;
 	rp_acq_decimation_t m_decimation;
+	int m_decimationValue = 8;
 	bool m_onlyPrintHelp = false;
 
 	bool m_shouldStop = false;
