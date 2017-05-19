@@ -4,15 +4,36 @@
 #include "lightning-trigger.hpp"
 
 #include <iostream>
+#include <memory>
 #include <signal.h>
 
 using namespace std;
 
+unique_ptr<LightningTrigger> t;
+
+void signalHandler(int signum)
+{
+	switch(signum)
+	{
+	case SIGINT:
+		cout << "Interruped by user" << endl;
+		t->stop();
+		break;
+	case SIGTERM:
+		cout << "Interruped by SIGTERM" << endl;
+		t->stop();
+		break;
+	}
+}
+
 int main(int argc, char **argv)
 {
-	LightningTrigger t;
-	if (t.parseParameters(argc, argv))
-		t.run();
+	signal(SIGINT, signalHandler);
+	signal(SIGTERM, signalHandler);
+
+	t.reset(new LightningTrigger);
+	if (t->parseParameters(argc, argv))
+		t->run();
 
 	return 0;
 }

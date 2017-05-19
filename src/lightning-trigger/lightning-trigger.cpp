@@ -30,8 +30,8 @@ bool LightningTrigger::parseParameters(int argc, char **argv)
 
 	po::options_description captureOptions("Capture options");
 	captureOptions.add_options()
-		("threshold,t",   po::value<double>()->default_value(m_treshold), "Trigger treshold, Volts")
-		("decimation,d",  po::value<unsigned int>()->default_value(m_decimationValue),  "Field decimation. Allowed: "
+		("threshold,t",  po::value<double>()->default_value(m_treshold), "Trigger treshold, [0..1]")
+		("decimation,d", po::value<unsigned int>()->default_value(m_decimationValue),  "Field decimation. Allowed: "
 				"1, 8, 64, 1024, 8192, 65536");
 
 	po::options_description outputOptions("Output options");
@@ -52,6 +52,8 @@ bool LightningTrigger::parseParameters(int argc, char **argv)
 		po::store(po::parse_command_line(argc, argv, allOptions), cmdLineOptions);
 		po::notify(cmdLineOptions);
 		m_treshold = cmdLineOptions["threshold"].as<double>();
+		if (m_treshold > 1.0)
+			m_treshold = 1.0;
 		m_ttlPulse = cmdLineOptions["pulse-width"].as<double>();
 		m_decimationValue = cmdLineOptions["decimation"].as<unsigned int>();
 		m_decimation = convertDecimation(m_decimationValue);
@@ -83,20 +85,22 @@ bool LightningTrigger::parseParameters(int argc, char **argv)
 
 void LightningTrigger::run()
 {
-	//return 0;
-
 	// Print error, if rp_Init() function failed
 	if (rp_Init() != RP_OK)
 	{
 	   cerr << "RedPitaya API initialization failed!" << endl;
+	   return;
 	}
+
+	rp_DpinSetDirection(ttlPin, RP_OUT);
+
+	m_blinkingThread.reset(new thread([this]{ blinkingTask(); }));
 
 	cout << "RedPitaya API initialization done" << endl;
 
 	m_buffer.resize(bufferSize, 0.0);
 
 	int result = RP_OK;
-
 
 	for (unsigned int c=0; !m_shouldStop && (m_capuresCount == 0 || c != m_capuresCount); c++)
 	{
@@ -110,8 +114,7 @@ void LightningTrigger::run()
 		// Here we have used time delay of one second but you can calculate exact value taking in to account buffer
 		//length and smaling rate
 
-		//usleep(double(m_decimationValue) / 125e6 * bufferSize * 1000 * 1.5);
-		usleep(double(m_decimationValue) / 125e6 * bufferSize * 1000 * 3);
+		std::this_thread::sleep_for( std::chrono::milliseconds(size_t(2 * getBufferDuration()*1000)));
 		rp_AcqSetTriggerSrc(RP_TRIG_SRC_CHA_PE);
 		rp_acq_trig_state_t state = RP_TRIG_STATE_TRIGGERED;
 
@@ -124,6 +127,8 @@ void LightningTrigger::run()
 				break;
 			}
 		}
+
+		std::this_thread::sleep_for (std::chrono::milliseconds(size_t(2 * getBufferDuration()*1000)));
 
 		if (m_shouldStop)
 			break;
@@ -152,22 +157,51 @@ void LightningTrigger::run()
 			outpf.write(reinterpret_cast<char*>(m_buffer.data()), readed * sizeof(m_buffer[0]));
 		}
 	}
-	// Releasing resources
+
+	stop();
+
 	rp_Release();
 }
 
 void LightningTrigger::stop()
 {
 	m_shouldStop = true;
+	doBlink();
+	if (m_blinkingThread->joinable())
+		m_blinkingThread->join();
 }
 
 void LightningTrigger::doBlink()
 {
-	rp_DpinSetState(ledPin, RP_HIGH);
-	rp_DpinSetState(ttlPin, RP_HIGH);
-	usleep(m_ttlPulse*1000);
-	rp_DpinSetState(ledPin, RP_LOW);
-	rp_DpinSetState(ttlPin, RP_LOW);
+	unique_lock<mutex> lock(m_blinkMutex);
+	m_blinkReady = true;
+	m_blinkCV.notify_one();
+}
+
+void LightningTrigger::blinkingTask()
+{
+	for(;;)
+	{
+		unique_lock<mutex> lock(m_blinkMutex);
+		while (!m_blinkReady) m_blinkCV.wait(lock);
+		m_blinkReady = false;
+		lock.unlock();
+
+		if (m_shouldStop)
+			return;
+
+		rp_DpinSetState(ledPin, RP_HIGH);
+		rp_DpinSetState(ttlPin, RP_HIGH);
+		std::this_thread::sleep_for (std::chrono::milliseconds(size_t(1000*m_ttlPulse)));
+		rp_DpinSetState(ledPin, RP_LOW);
+		rp_DpinSetState(ttlPin, RP_LOW);
+		std::this_thread::sleep_for (std::chrono::milliseconds(size_t(1000*m_ttlPulse)));
+	}
+}
+
+double LightningTrigger::getBufferDuration()
+{
+	return double(m_decimationValue) / 125e6 * bufferSize;
 }
 
 std::string LightningTrigger::getTime()
