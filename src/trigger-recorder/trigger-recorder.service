@@ -1,0 +1,13 @@
+[Unit]
+Description=Radio trigger and field recorder
+After=redpitaya_nginx.service
+
+[Service]
+ExecStart=/bin/sh /opt/rp-trigger-recorder/bin/trigger-recorder-launcher.sh
+WorkingDirectory=/home/redpitaya
+User=redpitaya
+SendSIGKILL=no
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

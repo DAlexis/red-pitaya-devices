@@ -5,9 +5,11 @@
  *      Author: Aleksey Bulatov
  */
 
-#include "lightning-trigger.hpp"
+#include "trigger-recorder.hpp"
 
 #include <boost/program_options.hpp>
+#include <boost/property_tree/ptree.hpp>
+#include <boost/property_tree/ini_parser.hpp>
 #include <iomanip>
 #include <ctime>
 #include <sstream>
@@ -16,17 +18,18 @@
 
 using namespace std;
 
-const std::string LightningTrigger::timeTag = "%t";
-const std::string LightningTrigger::numberTag = "%n";
+const std::string TriggerRecorder::timeTag = "%t";
+const std::string TriggerRecorder::numberTag = "%n";
 
-bool LightningTrigger::parseParameters(int argc, char **argv)
+bool TriggerRecorder::parseParameters(int argc, char **argv)
 {
 	namespace po = boost::program_options;
 	boost::program_options::variables_map cmdLineOptions;
 	po::options_description generalOptions("General options");
 	generalOptions.add_options()
 		("help,h", "Print help message")
-		("captures-cout,c",   po::value<unsigned int>()->default_value(m_capuresCount), "Count of captures (0 for infinite)");
+		("captures-cout,n",   po::value<unsigned int>()->default_value(m_capuresCount), "Count of captures (0 for infinite)")
+		("config,c", po::value<string>(), "Use configuration file");
 
 	po::options_description captureOptions("Capture options");
 	captureOptions.add_options()
@@ -38,6 +41,7 @@ bool LightningTrigger::parseParameters(int argc, char **argv)
 	outputOptions.add_options()
 		("pulse-width,w", po::value<double>()->default_value(m_ttlPulse), "Output TTL pulse width, s")
 		("field-file,f", po::value<string>()->default_value(m_filenameTemplate), "File to store electric field")
+		("silent,S", "Silent mode: no text 'Triggered' text output")
 		("save-field,s", "Enable field saving");
 
 	po::options_description allOptions("Allowed options");
@@ -46,7 +50,6 @@ bool LightningTrigger::parseParameters(int argc, char **argv)
 		.add(captureOptions)
 		.add(outputOptions);
 
-	cout << "Parsing cmdline" << endl;
 	try
 	{
 		po::store(po::parse_command_line(argc, argv, allOptions), cmdLineOptions);
@@ -71,19 +74,63 @@ bool LightningTrigger::parseParameters(int argc, char **argv)
 		return false;
 	}
 
-	m_fileEnabled = (cmdLineOptions.count("save-field") != 0);
-
-	m_onlyPrintHelp = (cmdLineOptions.count("help") != 0);
-
-	if (m_onlyPrintHelp)
+	if (cmdLineOptions.count("help") != 0)
 	{
+		cout << "Simple software for RedPitaya device that may be used as a console oscilloscope" << endl << endl;
 		cout << allOptions << endl;
 		return false;
 	}
+
+	m_silent = (cmdLineOptions.count("silent") != 0);
+
+	if (cmdLineOptions.count("config") != 0)
+	{
+		return tryReadConfigFile(cmdLineOptions["config"].as<string>() );
+	}
+
+	m_fileEnabled = (cmdLineOptions.count("save-field") != 0);
+
 	return true;
 }
 
-void LightningTrigger::run()
+bool TriggerRecorder::tryReadConfigFile(const std::string& filename)
+{
+	boost::property_tree::ptree pt;
+	try {
+		boost::property_tree::ini_parser::read_ini("/etc/rp-trigger-recorder.conf", pt);
+		m_treshold = pt.get<double>("capture.threshold");
+		if (m_treshold > 1.0)
+			m_treshold = 1.0;
+
+		m_decimationValue = pt.get<unsigned int>("capture.decimation");
+		m_decimation = convertDecimation(m_decimationValue);
+
+		m_ttlPulse = pt.get<double>("output.pulse-width");
+		m_filenameTemplate =  pt.get<string>("output.field-file");
+
+		m_capuresCount = pt.get<unsigned int>("general.captures-count");
+		m_fileEnabled = pt.get<bool>("general.save-field");
+	}
+	catch(boost::property_tree::ini_parser::ini_parser_error &exception)
+	{
+		cerr << std::string("Parsing error in ") + exception.filename() << endl;
+		return false;
+	}
+	catch(boost::property_tree::ptree_error &exception)
+	{
+		cerr << std::string("Parsing error in ") + exception.what() << endl;
+		return false;
+	}
+	catch(...)
+	{
+		cerr << "Unknown parsing error" << endl;
+		return false;
+	}
+
+	return true;
+}
+
+void TriggerRecorder::run()
 {
 	// Print error, if rp_Init() function failed
 	if (rp_Init() != RP_OK)
@@ -123,7 +170,8 @@ void LightningTrigger::run()
 			rp_AcqGetTriggerState(&state);
 			if(state == RP_TRIG_STATE_TRIGGERED)
 			{
-				cout << "Triggered" << endl;
+				if (!m_silent)
+					cout << "Triggered" << endl;
 				break;
 			}
 		}
@@ -163,7 +211,7 @@ void LightningTrigger::run()
 	rp_Release();
 }
 
-void LightningTrigger::stop()
+void TriggerRecorder::stop()
 {
 	m_shouldStop = true;
 	doBlink();
@@ -171,14 +219,14 @@ void LightningTrigger::stop()
 		m_blinkingThread->join();
 }
 
-void LightningTrigger::doBlink()
+void TriggerRecorder::doBlink()
 {
 	unique_lock<mutex> lock(m_blinkMutex);
 	m_blinkReady = true;
 	m_blinkCV.notify_one();
 }
 
-void LightningTrigger::blinkingTask()
+void TriggerRecorder::blinkingTask()
 {
 	for(;;)
 	{
@@ -199,12 +247,12 @@ void LightningTrigger::blinkingTask()
 	}
 }
 
-double LightningTrigger::getBufferDuration()
+double TriggerRecorder::getBufferDuration()
 {
 	return double(m_decimationValue) / 125e6 * bufferSize;
 }
 
-std::string LightningTrigger::getTime()
+std::string TriggerRecorder::getTime()
 {
 	ostringstream oss;
 	auto t = std::time(nullptr);
@@ -213,7 +261,7 @@ std::string LightningTrigger::getTime()
 	return oss.str();
 }
 
-std::string LightningTrigger::replaceTags(const std::string& tmpl, int n)
+std::string TriggerRecorder::replaceTags(const std::string& tmpl, int n)
 {
 	string result = tmpl;
 	size_t pos = result.find(timeTag);
@@ -226,7 +274,7 @@ std::string LightningTrigger::replaceTags(const std::string& tmpl, int n)
 	return result;
 }
 
-rp_acq_decimation_t LightningTrigger::convertDecimation(unsigned int value)
+rp_acq_decimation_t TriggerRecorder::convertDecimation(unsigned int value)
 {
 	switch(value)
 	{

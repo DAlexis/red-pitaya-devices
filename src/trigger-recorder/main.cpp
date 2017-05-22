@@ -1,7 +1,7 @@
 /* Red Pitaya C API example Acquiring a signal from a buffer  
  * This application acquires a signal on a specific channel */
 
-#include "lightning-trigger.hpp"
+#include "trigger-recorder.hpp"
 
 #include <iostream>
 #include <memory>
@@ -9,7 +9,7 @@
 
 using namespace std;
 
-unique_ptr<LightningTrigger> t;
+unique_ptr<TriggerRecorder> t;
 
 void signalHandler(int signum)
 {
@@ -31,7 +31,7 @@ int main(int argc, char **argv)
 	signal(SIGINT, signalHandler);
 	signal(SIGTERM, signalHandler);
 
-	t.reset(new LightningTrigger);
+	t.reset(new TriggerRecorder);
 	if (t->parseParameters(argc, argv))
 		t->run();
 

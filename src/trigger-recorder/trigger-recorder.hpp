@@ -16,7 +16,7 @@
 
 #include "redpitaya/rp.h"
 
-class LightningTrigger
+class TriggerRecorder
 {
 public:
 	bool parseParameters(int argc, char **argv);
@@ -37,15 +37,16 @@ private:
 
 	double getBufferDuration();
 	void blinkingTask();
+	bool tryReadConfigFile(const std::string& filename);
 
 	double m_treshold = 0.1;
 	double m_ttlPulse = 0.1;
 	unsigned int m_capuresCount = 0;
 	std::string m_filenameTemplate = "recorded-field-%t-%n.bin";
 	bool m_fileEnabled = false;
+	bool m_silent = false;
 	rp_acq_decimation_t m_decimation;
 	int m_decimationValue = 8;
-	bool m_onlyPrintHelp = false;
 
 	bool m_shouldStop = false;
 	std::vector<float> m_buffer;
